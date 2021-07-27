@@ -2,7 +2,6 @@
 import numpy as np
 import itertools
 import random
-import torch
 import nltk
 
 def all_binary_trees(n):

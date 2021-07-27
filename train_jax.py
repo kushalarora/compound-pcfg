@@ -15,8 +15,9 @@ import time
 import logging
 from data import Dataset
 from utils import *
-from models import CompPCFG
+from models_jax import CompPCFG
 from torch.nn.init import xavier_uniform_
+import optax
 
 parser = argparse.ArgumentParser()
 
@@ -75,7 +76,12 @@ def main(args):
   print(model)
   model.train()
   model.cuda()
-  optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, betas = (args.beta1, args.beta2))
+
+  optimizer = optax.chain(
+    optax.clip_by_global_norm(args.max_grad_norm),
+    optax.adam(args.lr, b1=args.beta1, b2=args.beta2)
+  )
+
   best_val_ppl = 1e5
   best_val_f1 = 0
   epoch = 0
@@ -100,7 +106,6 @@ def main(args):
       (nll+kl).mean().backward()
       train_nll += nll.sum().item()
       train_kl += kl.sum().item()
-      torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)      
       optimizer.step()
       num_sents += batch_size
       num_words += batch_size * (length + 1) # we implicitly generate </s> so we explicitly count it

@@ -2,8 +2,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import numpy as np
-from PCFG import PCFG
-from PCFG_vmap import PCFGVMap
+from PCFG_vmap_jax import PCFG
 from random import shuffle
 from torch import vmap
 
@@ -30,7 +29,7 @@ class CompPCFG(nn.Module):
     self.t_emb = nn.Parameter(torch.randn(t_states, state_dim))
     self.nt_emb = nn.Parameter(torch.randn(nt_states, state_dim))
     self.root_emb = nn.Parameter(torch.randn(1, state_dim))
-    self.pcfg = PCFGVMap(nt_states, t_states)
+    self.pcfg = PCFG(nt_states, t_states)
     self.nt_states = nt_states
     self.t_states = t_states
     self.all_states = nt_states + t_states
