@@ -9,11 +9,14 @@ import shutil
 import copy
 
 import torch
+import jax.numpy as jnp
+from jax import random
+
 from torch import cuda
 import numpy as np
 import time
 import logging
-from data import Dataset
+from data_jax import Dataset
 from utils import *
 from models_jax import CompPCFG
 from torch.nn.init import xavier_uniform_
@@ -44,31 +47,42 @@ parser.add_argument('--len_incr', default=1, type=int, help='increment max lengt
 parser.add_argument('--final_max_length', default=40, type=int, help='final max length cutoff')
 parser.add_argument('--beta1', default=0.75, type=float, help='beta1 for adam')
 parser.add_argument('--beta2', default=0.999, type=float, help='beta2 for adam')
-parser.add_argument('--gpu', default=0, type=int, help='which gpu to use')
-parser.add_argument('--seed', default=3435, type=int, help='random seed')
+parser.add_argument('--PRNGKey', default=3435, type=int, help='random seed')
+parser.add_argument('--numpy_seed', default=3435, type=int, help='numpy random seed')
 parser.add_argument('--print_every', type=int, default=1000, help='print stats after N batches')
 parser.add_argument('--vmap', action="store_true", help='Use VMAP.')
 
 def main(args):
-  np.random.seed(args.seed)
-  torch.manual_seed(args.seed)
+  np.random.seed(args.numpy_seed)
+  key = random.PRNGKey(args.PRNGKey)
   train_data = Dataset(args.train_file)
   val_data = Dataset(args.val_file)  
   train_sents = train_data.batch_size.sum()
   vocab_size = int(train_data.vocab_size)    
-  max_len = max(val_data.sents.size(1), train_data.sents.size(1))
+  max_len = max(jnp.size(val_data.sents, axis=1), jnp.size(train_data.sents, axis=1))
+
+
   print('Train: %d sents / %d batches, Val: %d sents / %d batches' % 
-        (train_data.sents.size(0), len(train_data), val_data.sents.size(0), len(val_data)))
+        (jnp.size(train_data.sents, axis=0), len(train_data), 
+         jnp.size(val_data.sents, axis=0), len(val_data)))
+  
   print('Vocab size: %d, Max Sent Len: %d' % (vocab_size, max_len))
   print('Save Path', args.save_path)
-  cuda.set_device(args.gpu)
-  model = CompPCFG(vocab = vocab_size,
+
+  import pdb; pdb.set_trace()
+  
+  key, model_key = random.split(key)
+
+  model = CompPCFG(key=model_key,
+                   vocab = vocab_size,
                    state_dim = args.state_dim,
                    t_states = args.t_states,
                    nt_states = args.nt_states,
                    h_dim = args.h_dim,
                    w_dim = args.w_dim,
-                   z_dim = args.z_dim)
+                   z_dim = args.z_dim, 
+                  )
+
   for name, param in model.named_parameters():    
     if param.dim() > 1:
       xavier_uniform_(param)

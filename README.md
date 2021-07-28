@@ -28,8 +28,7 @@ Running this will save the following files in the `data/` folder: `ptb-train.pkl
 ## Training
 To train the compound PCFG, run
 ```
-python train.py --train_file data/ptb-train.pkl --val_file data/ptb-val.pkl 
---save_path compound-pcfg.pt --gpu 0
+python train.py --train_file data/ptb-train.pkl --val_file data/ptb-val.pkl  --save_path compound-pcfg.pt --gpu 0
 ```
 where `--save_path` is where you want to save the model, and `--gpu 0` is for using the first GPU in the cluster (the mapping from PyTorch GPU index to your cluster's GPU index may vary).
 

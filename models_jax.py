@@ -1,56 +1,127 @@
-import torch
-from torch import nn
-import torch.nn.functional as F
+from flax.linen import nn
+import jax.numpy as jnp
+import jax
+
 import numpy as np
 from PCFG_vmap_jax import PCFG
 from random import shuffle
-from torch import vmap
+from simple_lstm import SimpleBiLSTM
 
 class ResidualLayer(nn.Module):
-  def __init__(self, in_dim = 100,
-               out_dim = 100):
-    super(ResidualLayer, self).__init__()
-    self.lin1 = nn.Linear(in_dim, out_dim)
-    self.lin2 = nn.Linear(out_dim, out_dim)
+  out_dim: int = 100,
+  def setup(self):
+    self.lin1 = nn.Dense(out_dim)
+    self.lin2 = nn.Dense(out_dim)
 
-  def forward(self, x):
-    return F.relu(self.lin2(F.relu(self.lin1(x)))) + x
+  def __call__(self, x):
+    return nn.relu(self.lin2(nn.relu(self.lin1(x)))) + x
+
+
+class RootMLP(nn.Module):
+  state_dim: int = 256
+  nt_states: int = 10
+  def setup(self):
+    self.lin1 = nn.Dense(self.state_dim)
+    self.res1 = ResidualLayer(out_dim=self.state_dim)
+    self.res2 = ResidualLayer(out_dim=self.state_dim)
+    self.lin2 = nn.Dense(self.nt_states)
+
+  def __call__(self, x):
+    return self.lin2(self.res2(self.res1(self.lin1(x))))
+
+
+class VocabMLP(nn.Module):
+  state_dim: int = 256
+  vocab: int = 100
+  def setup(self):
+    self.lin1 = nn.Dense(self.state_dim)
+    self.res1 = ResidualLayer(out_dim=self.state_dim)
+    self.res2 = ResidualLayer(out_dim=self.state_dim)
+    self.lin2 = nn.Dense(self.vocab)
+
+  def __call__(self, x):
+    return self.lin2(self.res2(self.res1(self.lin1(x))))
+
+
+class VAEEncoder(nn.Module):
+  def setup(self):
+    self.enc_emb = nn.Embed(self.vocab, self.w_dim)
+    self.lstm = SimpleBiLSTM(self.h_dim)
+    self.mean_layer = nn.Dense(self.z_dim)
+    self.var_layer = nn.Dense(self.z_dim)
+  
+  def __call__(self, x):
+    emb = self.enc_emb(x)
+    outputs = self.lstm(emb)
+    output = jnp.max(outputs, axis=1)
+    mean = self.mean_layer(output)
+    var = self.var_layer(output)
+    return mean, var
 
 class CompPCFG(nn.Module):
-  def __init__(self, vocab = 100,
+  vocab:int = 100,
+  h_dim:int = 512, 
+  w_dim:int = 512,
+  z_dim:int = 64,
+  state_dim:int = 256, 
+  t_states:int = 10,
+  nt_states:int = 10,
+  
+  def setup(self):
+    self.all_states = self.nt_states + self.t_states
+
+    self.pcfg = PCFG(self.nt_states, self.t_states)
+
+    self.rule_mlp = nn.Dense(self.all_states**2)
+    self.root_mlp = RootMLP(state_dim=self.state_dim, nt_states=self.nt_states)
+    self.vocab_mlp = VocabMLP(state_dim=self.state_dim, vocab=self.vocab)
+
+    if z_dim > 0:
+      self.enc_rnn = nn.LSTM(w_dim, h_dim, bidirectional=True, num_layers = 1, batch_first = True)
+      self.enc_params = nn.Linear(h_dim*2, z_dim*2)
+
+  def __init__(self, 
+               vocab = 100,
                h_dim = 512, 
                w_dim = 512,
                z_dim = 64,
                state_dim = 256, 
                t_states = 10,
-               nt_states = 10):
+               nt_states = 10,
+               ):
     super(CompPCFG, self).__init__()
     self.state_dim = state_dim
     self.t_emb = nn.Parameter(torch.randn(t_states, state_dim))
     self.nt_emb = nn.Parameter(torch.randn(nt_states, state_dim))
     self.root_emb = nn.Parameter(torch.randn(1, state_dim))
+    
     self.pcfg = PCFG(nt_states, t_states)
     self.nt_states = nt_states
     self.t_states = t_states
     self.all_states = nt_states + t_states
+
     self.dim = state_dim
+    self.z_dim = z_dim
+
     self.register_parameter('t_emb', self.t_emb)
     self.register_parameter('nt_emb', self.nt_emb)
     self.register_parameter('root_emb', self.root_emb)
+
     self.rule_mlp = nn.Linear(state_dim+z_dim, self.all_states**2)
     self.root_mlp = nn.Sequential(nn.Linear(z_dim + state_dim, state_dim),
                                   ResidualLayer(state_dim, state_dim),
                                   ResidualLayer(state_dim, state_dim),                         
                                   nn.Linear(state_dim, self.nt_states))
-    if z_dim > 0:
-      self.enc_emb = nn.Embedding(vocab, w_dim)
-      self.enc_rnn = nn.LSTM(w_dim, h_dim, bidirectional=True, num_layers = 1, batch_first = True)
-      self.enc_params = nn.Linear(h_dim*2, z_dim*2)
-    self.z_dim = z_dim
     self.vocab_mlp = nn.Sequential(nn.Linear(z_dim + state_dim, state_dim),
                                    ResidualLayer(state_dim, state_dim),
                                    ResidualLayer(state_dim, state_dim),
                                    nn.Linear(state_dim, vocab))
+
+    if z_dim > 0:
+      self.enc_emb = nn.Embedding(vocab, w_dim)
+      self.enc_rnn = nn.LSTM(w_dim, h_dim, bidirectional=True, num_layers = 1, batch_first = True)
+      self.enc_params = nn.Linear(h_dim*2, z_dim*2)
+
       
   def enc(self, x):
     emb = self.enc_emb(x)
@@ -64,7 +135,7 @@ class CompPCFG(nn.Module):
     result =  -0.5 * (logvar - torch.pow(mean, 2)- torch.exp(logvar) + 1)
     return result
 
-  def forward(self, x, argmax=False, use_mean=False):
+  def __call__(self, x, argmax=False, use_mean=False):
     #x : batch x n
     n = x.size(1)
     batch_size = x.size(0)
@@ -73,7 +144,6 @@ class CompPCFG(nn.Module):
       kl = self.kl(mean, logvar).sum(1) 
       z = mean.new(batch_size, mean.size(1)).normal_(0, 1)
       z = (0.5*logvar).exp()*z + mean    
-      kl = self.kl(mean, logvar).sum(1) 
       if use_mean:
         z = mean
       self.z = z

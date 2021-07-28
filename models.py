@@ -5,8 +5,7 @@ import numpy as np
 from PCFG import PCFG
 from PCFG_vmap import PCFGVMap
 from random import shuffle
-from torch import vmap
-
+from functorch import vmap
 class ResidualLayer(nn.Module):
   def __init__(self, in_dim = 100,
                out_dim = 100):
@@ -105,10 +104,11 @@ class CompPCFG(nn.Module):
     log_Z = vmap(self.pcfg._inside)(unary, rule_scores, root_scores)
     if self.z_dim == 0:
       kl = torch.zeros_like(log_Z)
+    import pdb; pdb.set_trace()
     if argmax:
       with torch.no_grad():
-        max_score, binary_matrix, spans, tags = vmap(self.pcfg._viterbi)(unary, rule_scores, root_scores)
         import pdb; pdb.set_trace()
+        max_score, binary_matrix, spans, tags = vmap(self.pcfg._viterbi)(unary, rule_scores, root_scores)
         self.tags = tags
       return -log_Z, kl, binary_matrix, spans
     else:
